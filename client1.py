@@ -4,7 +4,7 @@
 # 导入 socket、sys 模块
 import socket
 import threading
-
+from concurrent.futures import ThreadPoolExecutor  # 线程池
 
 class myThread (threading.Thread):
     '''
@@ -42,13 +42,13 @@ def connet_server(data):
 # 获取本地主机名
 host = socket.gethostname()
 # 设置端口号
-port = 7100
+port = 7000
 
 data = [{"func":"add","a":18,"b":3},{"func":"add","a":1,"b":3},{"func":"subtract","a":1,"b":3},{"func":"subtract","a":12,"b":3}]  #
-for i in data:
+thread_pool = ThreadPoolExecutor(2)
 
-    thread = myThread(i)
-    thread.start()
+for i in data:
+    thread_pool.submit(connet_server,i)
     # thread.join()
     print("lala")
     # connet_server(i)

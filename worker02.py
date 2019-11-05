@@ -9,7 +9,6 @@ import threading
 
 
 class myThread (threading.Thread):
-
     def __init__(self, clientsocket, addr):
         threading.Thread.__init__(self)
         self.clientsocket = clientsocket
@@ -20,7 +19,6 @@ class myThread (threading.Thread):
 
 
 def accept_client(clientsocket, addr):
-
     print("连接地址: %s" % str(addr))
 
     msg = '欢迎访问菜鸟教程！'
