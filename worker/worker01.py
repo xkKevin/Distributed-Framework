@@ -20,12 +20,23 @@ class HeartBeat(threading.Thread):
         threading.Thread.__init__(self)
 
     def run(self):
+        data = {"name": worker_name, "type": "heartbeat"}
+        # 创建 socket 对象
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # 连接服务，指定主机和端口
+        s.connect((master_ip, master_port))
+
         while True:
             time.sleep(hbi)
             if work_flag:
-                operate({"type": "heartbeat"})
+                # operate({"type": "heartbeat"})
+                s.send(str(data).encode('utf-8'))
+                # 接收小于 recv_num 字节的数据
+                msg = s.recv(recv_num)
+                print(msg.decode('utf-8'))
             else:
                 break
+        s.close()
 
 
 class WorkThread(threading.Thread):
@@ -51,7 +62,6 @@ class WorkThread(threading.Thread):
 def login():
     port = int(config[worker_name]["port"])
     threadNum = int(config[worker_name]["threadNum"])
-    operate({"port": port, "threadNum": threadNum, "type": "login"})
     global work_flag
     work_flag = True
     # 注册之后随即启动心跳
@@ -68,7 +78,6 @@ def logout():
 def operate(data):
 
     data["name"] = worker_name
-    data["service"] = service
     # 创建 socket 对象
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # 连接服务，指定主机和端口
@@ -107,7 +116,7 @@ def start_work_server():
         thread.start()
 
 
-# login()
+login()
 start_work_server()
 # logout()
 

@@ -28,9 +28,9 @@ def connect_master(data):
 
 
 server_ip = '192.168.101.1'
-server_port = 7000
+server_port = 7001
 
 data = {"service":"purchase","ingredients":"tomato"}
-for i in range(12):
+for i in range(5):
     cm_thread = myThread(data)
     cm_thread.start()
