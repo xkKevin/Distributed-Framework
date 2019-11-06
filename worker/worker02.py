@@ -16,6 +16,7 @@ work_flag = False   # 判断当前节点是否工作
 service = config[worker_name]["service"]
 port = int(config[worker_name]["port"])
 threadNum = int(config[worker_name]["threadNum"])
+listen_num = int(config[worker_name]["max_listen_num"])
 
 # 获取本地主机名
 host = socket.gethostname()
@@ -43,7 +44,6 @@ class HeartBeat(threading.Thread):
 
         print("关闭 workersocket")
         self.workersocket.close()
-        exit(0)
 
 
 class WorkThread(threading.Thread):
@@ -54,29 +54,16 @@ class WorkThread(threading.Thread):
 
     def run(self):  # 只接收一次消息，之后立马关闭socket
         msg_recv = self.clientsocket.recv(recv_num)
-        result = purchase(msg_recv.decode('utf-8'))
-        self.clientsocket.send(str(result).encode('utf-8'))
+        result = wash(msg_recv.decode('utf-8'))
+        self.clientsocket.send(result.encode('utf-8'))
+        self.clientsocket.close()
         print(result)
-        self.clientsocket.close()
-        '''
-        flag = True  # 可接收多次消息
-        while flag:
-            msg_recv = self.clientsocket.recv(recv_num)
-            if msg_recv:
-                result = purchase(msg_recv.decode('utf-8'))
-                self.clientsocket.send(str(result).encode('utf-8'))
-                print(result)
-            else:
-                flag = False
-        print("关闭socket")
-        self.clientsocket.close()
-        '''
 
-def purchase(ingredients):
-    print("start to purchase " + ingredients)
+
+def wash(ingredients):
+    print("start to wash " + ingredients)
     time.sleep(2)
-    print("Completed purchase")
-    return ingredients + " had been purchased!"
+    return ingredients + " had been washed!"
 
 
 def start_work_server():
@@ -85,7 +72,7 @@ def start_work_server():
     # 绑定端口号
     serversocket.bind((host, port))
     # 设置最大连接数，超过后排队
-    serversocket.listen(10)
+    serversocket.listen(listen_num)
     print(worker_name + "工作节点已开启" + service + "服务，端口为", port)
 
     def work_server_func():
@@ -108,7 +95,7 @@ def login():
     workersocket.connect((master_ip, master_port))
     data = {"name":worker_name, "port": port, "threadNum": threadNum, "type": "login", "service": service}
     workersocket.send(str(data).encode('utf-8'))
-    msg = workersocket.recv(1024)
+    msg = workersocket.recv(recv_num)
     print(msg.decode('utf-8'))
 
     global work_flag

@@ -1,142 +1,279 @@
-#!/usr/bin/python3
-# 文件名：server.py
-
-# 导入 socket、sys 模块
-import socket
-import time
-import json
+import socket, json, time
 import threading
+import configparser
 from concurrent.futures import ThreadPoolExecutor  # 线程池
+from queue import Queue
 
-from google.protobuf.internal.test_bad_identifiers_pb2 import service
+config = configparser.ConfigParser()
+config.read('master.conf')
+recv_num = int(config["master"]["recv_size"])
+time_judge = int(config["master"]["time_interval_judge"])
+port_for_worker = int(config["master"]["port_for_worker"])
+port_for_client = int(config["master"]["port_for_client"])
+listen_num = int(config["master"]["max_listen_num"])
 
+# 获取本地主机名
+host = socket.gethostname()
 
-def delete_work(name):
-    global work_node_log
-    for i in work_node_log:
-        if i["name"] == name:
-            work_node_log.remove(i)
-            return name+"注销成功"
+work_node_log = []   # 存放注册过的工作节点的记录信息：name, port, threadNum, addr
+work_status = []  # 存放以注册的工作节点的运行状态信息：name, status, lastTime （上一次发送心跳的时间）
 
-    return "不存在该节点：" + name
+# 存放每个已注册服务的工作节点的线程池，key为服务名，value为该服务所对应的线程池；master 为默认服务，即找不到客户端请求服务或该服务对应的工作节点处于unworking时，使用master服务
+services_thread_pool = {"master": ThreadPoolExecutor(3)}
 
-
-
-def run_service(serversocket, type):
-    while True:
-        # 建立客户端连接
-        clientsocket, addr = serversocket.accept()
-
-        if type == "login_out":
-            msg_recv = serversocket.recv(1024)
-            data = json.loads(msg_recv.decode('utf-8').replace("'", '"'))
-
-            global work_node_log
-            if data["type"] == "login":  # 申明工作节点名，端口号，线程数
-                login_data = {"name":data["name"], "port": data["port"], "threadNum":data["threadNum"], "addr":addr}
-                work_node_log.append(data)
-                msg = data["name"]+" 注册成功！"
-
-            elif data["type"] == "logout":  # 申明工作节点名
-                msg = delete_work(data["name"])
-
-            serversocket.send(msg.encode('utf-8'))
-
-        elif type == "logout":
-            pass
+request_queue = Queue()  # 创建请求消息队列，每则消息存放 客户端socket、服务名及参数 信息，如 {"socket":clientsocket, "service":"purchase","ingredients":"tomato"}
 
 
-class serverThread(threading.Thread):
-    def __init__(self, serversocket, type):
+def judge_work_exist(key, value):
+    for i in range(len(work_node_log)):
+        if work_node_log[i][key] == value:
+            return i
+    return -1
+
+
+def connect_worker(addr, ingredients): # addr 为 (ip, port)
+    # 创建 socket 对象
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # 连接服务，指定主机和端口
+    s.connect(addr)
+
+    s.send(ingredients.encode('utf-8'))
+    # 接收小于 recv_num 字节的数据
+    msg = s.recv(recv_num).decode('utf-8')
+    s.close()
+    # print(msg)
+    return msg
+
+
+class WorkerThread(threading.Thread):
+    def __init__(self, workersocket, addr):
         threading.Thread.__init__(self)
-        self.serversocket = serversocket
-        self.type = type
+        self.workersocket = workersocket
+        self.addr = addr
 
     def run(self):
-        run_service(self.serversocket, self.type)
+        flag = True
+        judge = -1
+        try:
+            while flag:
+                msg_recv = self.workersocket.recv(recv_num)
+                if msg_recv:
+                    data = json.loads(msg_recv.decode('utf-8').replace("'", '"'))
+
+                    judge = judge_work_exist("name", data["name"])
+                    if data["type"] == "login":  # 申明工作节点名，端口号，线程数，所提供的服务
+                        addr = (self.addr[0], data["port"])
+                        if judge < 0:  # 注册信息里不存在该节点
+                            login_data = {"name": data["name"], "threadNum": data["threadNum"],
+                                          "service": data["service"], "addr": addr}
+                            work_node_log.append(login_data)
+                            # work_status.append({"name": data["name"], "status": "working", "time": time.time()})
+                            work_status.append([data["name"], "working", time.time()])
+                            # 给该服务分配最大线程数
+                            services_thread_pool[data["service"]] = ThreadPoolExecutor(data["threadNum"])
+                            msg = data["name"] + " 注册成功！"
+                            print("work_node_log:", work_node_log)
+                            print("work_status:", work_status)
+
+                        else:  # 注册信息里存在该节点，需对其更新
+                            # work_node_log[judge]["port"] = data["port"]
+                            work_node_log[judge]["threadNum"] = data["threadNum"]
+                            work_node_log[judge]["service"] = data["service"]
+                            work_node_log[judge]["addr"] = addr
+                            work_status[judge][2] = time.time()
+                            services_thread_pool[data["service"]] = ThreadPoolExecutor(data["threadNum"])
+                            msg = "已更新 " + data["name"] + " 注册信息！"
+
+                    elif data["type"] == "logout":  # 申明工作节点名
+                        if judge >= 0:
+                            del (services_thread_pool[work_node_log[judge]["service"]])
+                            del (work_node_log[judge])
+                            del (work_status[judge])
+                            msg = data["name"] + " 节点注销成功！"
+                        else:
+                            msg = data["name"] + " 节点不存在！"
+
+                    elif data["type"] == "heartbeat":  # 心跳机制
+                        if judge >= 0:
+                            work_status[judge][2] = time.time()
+                            msg = work_status[judge][0] + " 当前状态为 " + work_status[judge][1]
+                        else:
+                            msg = data["name"] + " 节点未注册！"
+
+                    else:
+                        msg = "请求类型有误！"
+
+                    # print(msg)
+                    # print("work_node_log:", work_node_log)
+                    # print("work_status:", work_status)
+                    self.workersocket.send(msg.encode('utf-8'))
+
+                else:
+                    flag = False
+
+        except ConnectionResetError as e:  # 此工作节点意外宕机
+            work_status[judge][1] = "unworking"
+            print(work_status[judge][0] + " 意外终止")
+
+        #print("关闭socket")
+        print("work_status:", work_status)
+        print("work_node_log:", work_node_log)
+        print("services_thread_pool:", services_thread_pool)
+        self.workersocket.close()
 
 
-
-
-class myThread(threading.Thread):
-    def __init__(self, clientsocket, addr, type):
+class ClientThread(threading.Thread):
+    def __init__(self, clientsocket, addr):
         threading.Thread.__init__(self)
         self.clientsocket = clientsocket
         self.addr = addr
-        self.type = type
 
     def run(self):
-        accept_client(self.clientsocket, self.addr, self.type)
-
-
-def accept_client(clientsocket, addr, type):
-    print("连接地址: %s" % str(addr))
-    if type == "login":
-        msg_recv = clientsocket.recv(1024)  # 申明工作节点名，端口号，线程数
+        msg_recv = self.clientsocket.recv(recv_num)
         data = json.loads(msg_recv.decode('utf-8').replace("'", '"'))
-        global work_node_log
-        work_node_log.append(data)
+        judge = judge_work_exist("service", data["service"])
+        if judge >= 0:
+            if work_status[judge][1] == "working":
+                msg = connect_worker(work_node_log[judge]["addr"], data["ingredients"])
+            else:
+                msg = work_status[judge][0] + "处于不工作状态，无法提供 " + data["service"] + " 服务！"
+        else:
+            msg = data["service"] + " 服务不存在！"
 
-        msg = data["name"]+" 注册成功！"
-        clientsocket.send(msg.encode('utf-8'))
-
-    elif type == "logout":
-        pass
-
-    clientsocket.close()
-    '''
-    msg = '欢迎访问菜鸟教程！'
-    clientsocket.send(msg.encode('utf-8'))
-
-    msg_recv = clientsocket.recv(1024)
-    # data = json.loads(msg_recv.decode('utf-8'))
-    data = msg_recv.decode('utf-8').replace("'", '"')
-    print(data, type(data))
-
-    json_data = json.loads(data)
-    result = globals()[json_data["func"]](json_data["a"], json_data["b"])
-    clientsocket.send(str(result).encode('utf-8'))
-    print(result)
-    '''
+        self.clientsocket.send(msg.encode('utf-8'))
+        self.clientsocket.close()
+        print(msg)
 
 
-work_node_log = []  # 一个对象数组，存放注册信息
-work01_thread_pool = ThreadPoolExecutor(5)
-
-def add(a,b):
-    print("进入add方法")
-    time.sleep(2)
-    return a+b
-
-def subtract(a,b):
-    print("进入subtract方法")
-    time.sleep(2)
-    return a-b
-
-
-def create_server(port):
+def server_for_worker():
     # 创建 socket 对象
-    serversocket = socket.socket(
-        socket.AF_INET, socket.SOCK_STREAM)
-    # 获取本地主机名
-    host = socket.gethostname()
+    socket_for_worker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # 绑定端口号
-    serversocket.bind((host, port))
+    socket_for_worker.bind((host, port_for_worker))
     # 设置最大连接数，超过后排队
-    serversocket.listen(10)
+    socket_for_worker.listen(listen_num)
+    print("面向工作节点的服务已开启，端口为", port_for_worker)
 
-    return serversocket
+    def for_worker_func():
+        while True:
+            # 建立客户端连接
+            workersocket, addr = socket_for_worker.accept()
+            thread = WorkerThread(workersocket, addr)
+            thread.start()
+
+    work_server_thread = threading.Thread()
+    work_server_thread.run = for_worker_func
+    work_server_thread.start()
 
 
-def run_server(serversocket,type):
+def server_for_client():
+    # 创建 socket 对象
+    socket_for_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # 绑定端口号
+    socket_for_client.bind((host, port_for_client))
+    # 设置最大连接数，超过后排队
+    socket_for_client.listen(listen_num)
+    print("面向客户端的服务已开启，端口为", port_for_client)
+
+    def for_client_func():
+        while True:
+            # 建立客户端连接
+            clientsocket, addr = socket_for_client.accept()
+            #thread = ClientThread(clientsocket, addr)  # 不使用消息队列及线程池，直接来一个运行一个
+            #thread.start()
+            msg_recv = clientsocket.recv(recv_num)
+            message = json.loads(msg_recv.decode('utf-8').replace("'", '"'))
+            message["socket"] = clientsocket
+            # 将消息放入消息队列中，message 数据格式为：{"socket":clientsocket, "service":"purchase","ingredients":"tomato"}
+            request_queue.put(message)
+
+    client_server_thread = threading.Thread()
+    client_server_thread.run = for_client_func
+    client_server_thread.start()
+
+
+def master_error_service(clientsocket, msg):
+    clientsocket.send(msg.encode('utf-8'))
+    clientsocket.close()
+    print(msg)
+
+
+def working_service(clientsocket, addr, ingredients):
+    # 调度相应服务
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # 连接服务，指定主机和端口
+    s.connect(addr)
+    s.send(ingredients.encode('utf-8'))
+    # 接收小于 recv_num 字节的数据
+    msg = s.recv(recv_num).decode('utf-8')
+    s.close()
+
+    clientsocket.send(msg.encode('utf-8'))
+    clientsocket.close()
+    print(msg)
+
+
+def scheduling_management():
     while True:
-        # 建立客户端连接
-        clientsocket, addr = serversocket.accept()
-        thread = myThread(clientsocket, addr,type)
-        thread.start()
+        # 如果 消息队列 不为空，则执行相应服务
+        while not request_queue.empty():
+            message = request_queue.get()
+
+            judge = judge_work_exist("service", message["service"])
+            if judge >= 0:
+                if work_status[judge][1] == "working":  # 对应服务的线程池
+                    services_thread_pool[message["service"]].submit(working_service, message["socket"], work_node_log[judge]["addr"], message["ingredients"])
+                else:
+                    msg = "Error! " + work_status[judge][0] + " 处于不工作状态，暂无法提供 " + message["service"] + " 服务！"
+                    services_thread_pool["master"].submit(master_error_service, message["socket"], msg)
+
+            else:
+                msg = "Error! " + message["service"] + " 服务不存在！"
+                services_thread_pool["master"].submit(master_error_service, message["socket"], msg)
+
+            # print("This is scheduling_management")
 
 
-login_out_server = create_server(7000)
+def delete_abort_node():  # 对于 unworking 的节点，在规定时间内没有重启，则会自动删除该节点的注册信息
+    def delete_node_func():
+        while True:
+            time.sleep(time_judge)
+            this_time = time.time()
+            delete_nodes = []
+            for wsi in range(len(work_status)):
+                if work_status[wsi][1] == "unworking" and this_time - work_status[wsi][2] > time_judge:
+                    delete_nodes.append(wsi)
 
-login_out_thread = serverThread(login_out_server, "login_out")
-login_out_thread.start()
+            for i in range(len(delete_nodes)):
+                new_i = delete_nodes[i] - i
+                print("已删除 " + work_status[new_i][0] + " 节点的注册信息")
+                del (services_thread_pool[work_node_log[new_i]["service"]])
+                del (work_node_log[new_i])
+                del (work_status[new_i])
+
+    delete_node_thread = threading.Thread()
+    delete_node_thread.run = delete_node_func
+    delete_node_thread.start()
+
+
+'''
+def delete_abort_node():  # 对于 unworking 的节点，在规定时间内没有重启，则会自动删除该节点的注册信息
+    while True:
+        time.sleep(time_judge)
+        this_time = time.time()
+        for wsi in range(len(work_status)):
+            if work_status[wsi][1] == "unworking" and this_time - work_status[wsi][2] > time_judge:
+                print("已删除 " + work_status[wsi][0] + " 节点的注册信息")
+                del (services_thread_pool[work_node_log[wsi]["service"]])
+                del (work_node_log[wsi])
+                del (work_status[wsi])
+                print("work_status:", work_status)
+                print("work_node_log:", work_node_log)
+                print("services_thread_pool:", services_thread_pool)
+'''
+
+
+server_for_worker()
+server_for_client()
+delete_abort_node()
+scheduling_management()
