@@ -43,6 +43,7 @@ class HeartBeat(threading.Thread):
 
         print("关闭 workersocket")
         self.workersocket.close()
+        exit(0)
 
 
 class WorkThread(threading.Thread):
@@ -124,5 +125,5 @@ def logout():
 
 start_work_server()
 login()
-time.sleep(55)
-logout()
+#time.sleep(55)
+#logout()

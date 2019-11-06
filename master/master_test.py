@@ -2,6 +2,7 @@ import socket, json, time
 import threading
 import configparser
 from concurrent.futures import ThreadPoolExecutor  # 线程池
+from queue import Queue
 
 config = configparser.ConfigParser()
 config.read('master.conf')
@@ -16,7 +17,11 @@ host = socket.gethostname()
 
 work_node_log = []   # 存放注册过的工作节点的记录信息：name, port, threadNum, addr
 work_status = []  # 存放以注册的工作节点的运行状态信息：name, status, lastTime （上一次发送心跳的时间）
-services_thread_pool = {}  # 存放每个已注册服务的工作节点的线程池，key为服务名，value为该服务所对应的线程池
+
+# 存放每个已注册服务的工作节点的线程池，key为服务名，value为该服务所对应的线程池；master 为默认服务，即找不到客户端请求服务或该服务对应的工作节点处于unworking时，使用master服务
+services_thread_pool = {"master": ThreadPoolExecutor(3)}
+
+request_queue = Queue()  # 创建请求消息队列，每则消息存放 客户端socket、服务名及参数 信息，如 {"socket":clientsocket, "service":"purchase","ingredients":"tomato"}
 
 
 def judge_work_exist(key, value):
@@ -67,6 +72,8 @@ class WorkerThread(threading.Thread):
                             # 给该服务分配最大线程数
                             services_thread_pool[data["service"]] = ThreadPoolExecutor(data["threadNum"])
                             msg = data["name"] + " 注册成功！"
+                            print("work_node_log:", work_node_log)
+                            print("work_status:", work_status)
 
                         else:  # 注册信息里存在该节点，需对其更新
                             # work_node_log[judge]["port"] = data["port"]
@@ -172,31 +179,84 @@ def server_for_client():
         while True:
             # 建立客户端连接
             clientsocket, addr = socket_for_client.accept()
-            thread = ClientThread(clientsocket, addr)
-            thread.start()
+            #thread = ClientThread(clientsocket, addr)  # 不使用消息队列及线程池，直接来一个运行一个
+            #thread.start()
+            msg_recv = clientsocket.recv(recv_num)
+            message = json.loads(msg_recv.decode('utf-8').replace("'", '"'))
+            message["socket"] = clientsocket
+            # 将消息放入消息队列中，message 数据格式为：{"socket":clientsocket, "service":"purchase","ingredients":"tomato"}
+            request_queue.put(message)
 
     client_server_thread = threading.Thread()
     client_server_thread.run = for_client_func
     client_server_thread.start()
 
 
-'''
+def master_error_service(clientsocket, msg):
+    clientsocket.send(msg.encode('utf-8'))
+    clientsocket.close()
+    print(msg)
+
+
+def working_service(clientsocket, addr, ingredients):
+    # 调度相应服务
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # 连接服务，指定主机和端口
+    s.connect(addr)
+    s.send(ingredients.encode('utf-8'))
+    # 接收小于 recv_num 字节的数据
+    msg = s.recv(recv_num).decode('utf-8')
+    s.close()
+
+    clientsocket.send(msg.encode('utf-8'))
+    clientsocket.close()
+    print(msg)
+
+
+def scheduling_management():
+    while True:
+        # 如果 消息队列 不为空，则执行相应服务
+        while not request_queue.empty():
+            message = request_queue.get()
+
+            judge = judge_work_exist("service", message["service"])
+            if judge >= 0:
+                if work_status[judge][1] == "working":  # 对应服务的线程池
+                    services_thread_pool[message["service"]].submit(working_service, message["socket"], work_node_log[judge]["addr"], message["ingredients"])
+                else:
+                    msg = work_status[judge][0] + " 处于不工作状态，暂无法提供 " + message["service"] + " 服务！"
+                    services_thread_pool["master"].submit(master_error_service, message["socket"], msg)
+
+            else:
+                msg = message["service"] + " 服务不存在！"
+                services_thread_pool["master"].submit(master_error_service, message["socket"], msg)
+
+            print("This is scheduling_management")
+
+
 def delete_abort_node():  # 对于 unworking 的节点，在规定时间内没有重启，则会自动删除该节点的注册信息
     def delete_node_func():
         while True:
             time.sleep(time_judge)
             this_time = time.time()
+            delete_nodes = []
             for wsi in range(len(work_status)):
                 if work_status[wsi][1] == "unworking" and this_time - work_status[wsi][2] > time_judge:
-                    del (services_thread_pool[work_node_log[wsi]["service"]])
-                    del (work_node_log[wsi])
-                    del (work_status[wsi])
+                    delete_nodes.append(wsi)
+
+            for i in range(len(delete_nodes)):
+                new_i = delete_nodes[i] - i
+                print("已删除 " + work_status[new_i][0] + " 节点的注册信息")
+                del (services_thread_pool[work_node_log[new_i]["service"]])
+                del (work_node_log[new_i])
+                del (work_status[new_i])
 
     delete_node_thread = threading.Thread()
     delete_node_thread.run = delete_node_func
     delete_node_thread.start()
-'''
 
+
+'''
 def delete_abort_node():  # 对于 unworking 的节点，在规定时间内没有重启，则会自动删除该节点的注册信息
     while True:
         time.sleep(time_judge)
@@ -210,9 +270,10 @@ def delete_abort_node():  # 对于 unworking 的节点，在规定时间内没�
                 print("work_status:", work_status)
                 print("work_node_log:", work_node_log)
                 print("services_thread_pool:", services_thread_pool)
+'''
 
 
 server_for_worker()
 server_for_client()
 delete_abort_node()
-
+scheduling_management()
