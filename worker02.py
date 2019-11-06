@@ -1,7 +1,3 @@
-#!/usr/bin/python3
-# 文件名：server.py
-
-# 导入 socket、sys 模块
 import socket
 import time
 import json

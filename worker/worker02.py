@@ -5,6 +5,7 @@ import configparser
 config = configparser.ConfigParser()
 config.read('workers.conf')
 recv_num = int(config["global"]["recv_size"])
+hbi = int(config["global"]["heartbeat_interval"])
 
 
 # 获取本地主机名
@@ -18,7 +19,7 @@ class HeartBeat(threading.Thread):
 
     def run(self):
         while True:
-            time.sleep(2)
+            time.sleep(hbi)
             if work_flag:
                 operate({"type": "heartbeat"})
             else:
