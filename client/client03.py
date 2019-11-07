@@ -35,7 +35,9 @@ def connect_master(data):
     print(msg.decode('utf-8'))
 
 
-data = {"service":"CookMeals","ingredients":"tomato"}
+
+data = {"service":"Wash","ingredients":"tomato"}
+print(master_ip, master_port)
 for i in range(5):
     cm_thread = myThread(data)
     cm_thread.start()

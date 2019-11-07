@@ -14,12 +14,13 @@ master_port = int(config["global"]["master_port"])
 work_flag = False   # 判断当前节点是否工作
 
 service = config[worker_name]["service"]
-port = int(config[worker_name]["port"])
+service_port = int(config[worker_name]["service_port"])
+heartbeat_port = int(config[worker_name]["heartbeat_port"])
 threadNum = int(config[worker_name]["threadNum"])
 listen_num = int(config[worker_name]["max_listen_num"])
-
+host = config[worker_name]["worker_ip"]
 # 获取本地主机名
-host = socket.gethostname()
+#host = socket.gethostname()
 
 
 class HeartBeat(threading.Thread):
@@ -70,10 +71,10 @@ def start_work_server():
     # 创建 socket 对象
     serversocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # 绑定端口号
-    serversocket.bind((host, port))
+    serversocket.bind((host, service_port))
     # 设置最大连接数，超过后排队
     serversocket.listen(listen_num)
-    print(worker_name + "工作节点已开启" + service + "服务，端口为", port)
+    print(worker_name + "工作节点已开启" + service + "服务，端口为", service_port)
 
     def work_server_func():
         while True:
@@ -92,8 +93,9 @@ def start_work_server():
 def login():
     # 创建 socket 对象
     workersocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    workersocket.bind((host, heartbeat_port))
     workersocket.connect((master_ip, master_port))
-    data = {"name":worker_name, "port": port, "threadNum": threadNum, "type": "login", "service": service}
+    data = {"name":worker_name, "port": service_port, "threadNum": threadNum, "type": "login", "service": service}
     workersocket.send(str(data).encode('utf-8'))
     msg = workersocket.recv(recv_num)
     print(msg.decode('utf-8'))
