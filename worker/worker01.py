@@ -34,9 +34,9 @@ class HeartBeat(threading.Thread):
         while work_flag:
             time.sleep(hbi)
             self.workersocket.send(str(data).encode('utf-8'))
-            # 接收小于 recv_num 字节的数据
-            msg = self.workersocket.recv(recv_num)
-            print(msg.decode('utf-8'))
+            # master 不回复 worker 心跳 信息 （只发不回）
+            # msg = self.workersocket.recv(recv_num)
+            # print(msg.decode('utf-8'))
 
         # 注销
         data["type"] = "logout"
@@ -150,5 +150,6 @@ def logout():
 
 start_work_server()
 login()
-#time.sleep(55)
-#logout()
+print("5秒后执行服务注销")
+time.sleep(5)
+logout()

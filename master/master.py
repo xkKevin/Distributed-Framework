@@ -68,13 +68,14 @@ class WorkerThread(threading.Thread):
                             login_data = {"name": data["name"], "threadNum": data["threadNum"],
                                           "service": data["service"], "addr": addr}
                             worker_log.append(login_data)
+                            print(login_data)
                             # work_status.append({"name": data["name"], "status": "working", "time": time.time()})
                             worker_status.append([data["name"], "working", time.time()])
                             # 给该服务分配最大线程数
                             services_thread_pool[data["service"]] = ThreadPoolExecutor(data["threadNum"])
                             msg = data["name"] + " 注册成功！"
-                            print("work_node_log:", worker_log)
-                            print("work_status:", worker_status)
+                            # print("worker_log:", worker_log)
+                            # print("work_status:", worker_status)
 
                         else:  # 注册信息里存在该节点，需对其更新
                             # work_node_log[judge]["port"] = data["port"]
@@ -97,7 +98,8 @@ class WorkerThread(threading.Thread):
                     elif data["type"] == "heartbeat":  # 心跳机制
                         if judge >= 0:
                             worker_status[judge][2] = time.time()
-                            msg = worker_status[judge][0] + " 当前状态为 " + worker_status[judge][1]
+                            # msg = worker_status[judge][0] + " 当前状态为 " + worker_status[judge][1]
+                            msg = ""
                         else:
                             msg = data["name"] + " 节点未注册！"
 
@@ -105,9 +107,11 @@ class WorkerThread(threading.Thread):
                         msg = "请求类型有误！"
 
                     # print(msg)
-                    # print("work_node_log:", work_node_log)
-                    # print("work_status:", work_status)
-                    self.workersocket.send(msg.encode('utf-8'))
+                    # print("worker_log:", worker_log)
+                    # print("work_status:", worker_status)
+                    if msg: # 不给 心跳机制 的worker 返回信息，提高性能
+                        print(msg)
+                        self.workersocket.send(msg.encode('utf-8'))
 
                 else:
                     flag = False
@@ -180,9 +184,9 @@ def server_for_client():
         while True:
             # 建立客户端连接
             clientsocket, addr = socket_for_client.accept()
-            print(addr)
-            #thread = ClientThread(clientsocket, addr)  # 不使用消息队列及线程池，直接来一个运行一个
-            #thread.start()
+            # print(addr)
+            # thread = ClientThread(clientsocket, addr)  # 不使用消息队列及线程池，直接来一个运行一个
+            # thread.start()
             msg_recv = clientsocket.recv(recv_num)
             message = json.loads(msg_recv.decode('utf-8').replace("'", '"'))
             message["socket"] = clientsocket
@@ -205,7 +209,7 @@ def working_service(clientsocket, addr, ingredients):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # 连接服务，指定主机和端口
     s.connect(addr)
-    print(addr)
+    # print(addr)
     s.send(ingredients.encode('utf-8'))
     # 接收小于 recv_num 字节的数据
     msg = s.recv(recv_num).decode('utf-8')
